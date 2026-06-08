@@ -178,3 +178,32 @@ Si vous rencontrez des difficultés dans la réalisation des activités et que v
 - Un fichier .zip contenant l'intégralité du code source du projet Labo 03.
 - Un fichier .mwb contenant le modèle ER de la base de données du projet Labo 03.
 - Un rapport en .pdf répondant aux questions présentées dans ce document. Il est obligatoire d'illustrer vos réponses avec du code ou des captures d'écran/terminal.
+
+---
+
+## Modifications apportees (livraison)
+
+### Schema de base de donnees
+| Table | Colonnes | Relations |
+|-------|----------|-----------|
+| users | id (PK), name, email, created_at | — |
+| products | id (PK), name, sku, price, created_at | — |
+| orders | id (PK), user_id (FK users.id), total_amount, created_at | orders.user_id -> users.id (ON DELETE CASCADE) |
+| order_items | id (PK), order_id (FK), product_id (FK), quantity, unit_price | -> orders.id ; -> products.id |
+| stocks | product_id (PK, FK products.id), quantity | stocks.product_id -> products.id (ON DELETE RESTRICT) |
+
+### Fichiers modifies par activite
+- Act. 1 : db-init/init.sql (table stocks + seed). Diagramme ER : fichier .mwb joint.
+- Act. 2 : src/tests/test_store_manager.py (test_stock_flow, 6 etapes).
+- Act. 3 : src/stocks/queries/read_stock.py (JOIN Stock/Product).
+- Act. 5 : src/stocks/schemas/product.py, src/stocks/schemas/query.py, src/stocks/commands/write_stock.py (name/sku/price dans Redis).
+- Act. 6 : scripts/supplier_app.py (TEST_PAYLOAD + sku/price).
+- CI/CD : .github/workflows/ci.yml (services MySQL/Redis + pytest).
+
+### Demarrage
+    docker network create labo03-network
+    cp .env.example .env
+    docker compose up -d
+    docker compose exec store_manager python -m pytest tests/ -v
+
+Reponses Q1-Q6 : voir RAPPORT.md.

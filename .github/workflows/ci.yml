@@ -8,16 +8,46 @@ on:
 jobs:
   test:
     runs-on: ubuntu-latest
+
+    services:
+      mysql:
+        image: mysql:8.4.7
+        env:
+          MYSQL_ROOT_PASSWORD: root
+          MYSQL_DATABASE: labo03_db
+          MYSQL_USER: labo03
+          MYSQL_PASSWORD: labo03
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="mysqladmin ping -h localhost -u root -proot"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=10
+
+      redis:
+        image: redis:7
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd="redis-cli ping"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=10
+
     steps:
       - uses: actions/checkout@v4
+
       - name: Set up Python
         uses: actions/setup-python@v4
         with:
           python-version: '3.11'
+
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
+          pip install pytest
 
       - name: Creer fichier .env
         run: |
@@ -25,11 +55,14 @@ jobs:
           echo "DB_PORT=3306" >> .env
           echo "DB_NAME=labo03_db" >> .env
           echo "DB_USER=labo03" >> .env
-          echo "DB_PASS=labo03" >> .env
+          echo "DB_PASSWORD=labo03" >> .env
           echo "REDIS_HOST=127.0.0.1" >> .env
           echo "REDIS_PORT=6379" >> .env
           echo "REDIS_DB=0" >> .env
 
+      - name: Initialiser la base de donnees
+        run: mysql -h 127.0.0.1 -u root -proot labo03_db < db-init/init.sql
+
       - name: Run tests
         working-directory: src
-        run: echo "Call pytest command here!"
+        run: python -m pytest tests/ -v
