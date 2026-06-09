@@ -135,6 +135,10 @@ Avec le résolveur d'origine (`resolve_product` ne lisant que `quantity` dans Re
 
 retournait uniquement `id` et `quantity`. En demandant `name`, on obtenait la valeur **placeholder** `"Product 1"` (codée en dur), et les champs `sku`/`price` **n'existaient pas** dans le schéma (erreur *Cannot query field*). Les données réelles de l'article n'étaient donc pas disponibles via GraphQL.
 
+> 📸 **Capture Postman (Q3)** — requête suggérée `{ product(id: "1") { id quantity } }` :
+
+![Capture Postman Q3](captures/postman_q3.png)
+
 ---
 
 ## Activité 5 — Enrichissement de l'endpoint GraphQL
@@ -192,6 +196,10 @@ Réponse réelle de `POST /stocks/graphql-query` :
 ```
 
 Le client peut désormais interroger `name`, `sku`, `price` et `quantity` via GraphQL, en choisissant exactement les champs dont il a besoin.
+
+> 📸 **Capture Postman (Q5)** — requête enrichie `{ product(id: "1") { id name sku price quantity } }` :
+
+![Capture Postman Q5](captures/postman_q5.png)
 
 ---
 
