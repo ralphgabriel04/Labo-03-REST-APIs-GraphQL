@@ -3,6 +3,7 @@ services:
     build: .
     environment:
       - PYTHONUNBUFFERED=1
+      - ENDPOINT_URL=http://store_manager:5000/stocks/graphql-query
     volumes:
       - .:/app
     networks:

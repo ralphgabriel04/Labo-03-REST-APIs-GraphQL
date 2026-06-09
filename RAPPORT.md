@@ -203,6 +203,16 @@ Le script fournisseur `scripts/supplier_app.py` interroge l'endpoint GraphQL dep
 TEST_PAYLOAD = "{\"query\":\"{\\n  product(id: \\\"1\\\") {\\n    id\\n    name\\n    sku\\n    price\\n    quantity\\n  }\\n}\\n\",\"variables\":{}}"
 ```
 
+**Execution du conteneur fournisseur** (`docker compose -f scripts/docker-compose.yml up --build`). Le conteneur, sur le reseau `labo03-network`, joint l API par son **nom de service** `store_manager` :
+
+```
+INFO - Calling http://store_manager:5000/stocks/graphql-query (attempt 1/3)
+INFO - Response: 200 - OK
+INFO - Response body: {"data":{"product":{"id":1,"name":"Laptop ABC","price":1999.99,"quantity":1000,"sku":"LP12567"}},"errors":null}
+```
+
+Le client fournisseur recoit bien `name`, `sku` et `price`. `ENDPOINT_URL` a ete rendu configurable (defaut `localhost`, surcharge vers `http://store_manager:5000/...` dans `scripts/docker-compose.yml`) afin que le conteneur joigne l API via le DNS du reseau Docker.
+
 ### 💡 Question 6 — Mécanisme de communication
 
 Les deux fichiers (`docker-compose.yml` à la racine et `scripts/docker-compose.yml`) déclarent **le même réseau externe `labo03-network`** :

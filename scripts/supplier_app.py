@@ -3,13 +3,15 @@ Supplier Stock-Checking Application
 SPDX - License - Identifier: LGPL - 3.0 - or -later
 Auteurs : Gabriel C. Ullmann, Fabio Petrillo, 2025
 """
+import os
+import os
 import sys
 import logging
 import signal
 from endpoint_tester import EndpointTester
 
 # Test parameters
-ENDPOINT_URL = "http://localhost:5000/stocks/graphql-query"
+ENDPOINT_URL = os.environ.get("ENDPOINT_URL", "http://localhost:5000/stocks/graphql-query")
 # From within a container in the same network: http://log430-a25-labo3-store_manager:5000/stocks/graphql-query
 TEST_PAYLOAD = "{\"query\":\"{\\n  product(id: \\\"1\\\") {\\n    id\\n    name\\n    sku\\n    price\\n    quantity\\n  }\\n}\\n\",\"variables\":{}}"
 INTERVAL_SECONDS = 10  
