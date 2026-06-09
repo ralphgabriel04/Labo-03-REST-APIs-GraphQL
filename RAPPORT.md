@@ -68,7 +68,24 @@ Pour les méthodes utilisées à l'activité 2 :
 | POST | `POST /products`, `POST /stocks`, `POST /orders` | Non | Non |
 | DELETE | `DELETE /orders/:id` | Non | Oui |
 
-Le `GET` se contente de lire le stock : il est donc sûr et idempotent. Le `POST` n'est ni l'un ni l'autre, parce que chaque appel crée une ressource : deux `POST /orders` identiques produisent deux commandes distinctes et décrémentent le stock deux fois. Le `DELETE` modifie l'état, donc il n'est pas sûr, mais il reste idempotent : supprimer la commande #5 une fois ou dix fois mène au même résultat final (la commande n'existe plus), les appels suivants renvoyant simplement un 404.
+Le `GET` se contente de lire le stock : il est donc sûr et idempotent. Le `POST` n'est ni l'un ni l'autre, parce que chaque appel crée une ressource : deux `POST /orders` identiques produisent deux commandes distinctes et décrémentent le stock deux fois. Le `DELETE` modifie l'état, donc il n'est pas sûr, mais il reste idempotent : supprimer une commande une fois ou dix fois mène au même résultat final (la commande n'existe plus), les appels suivants renvoyant simplement un 404.
+
+J'ai vérifié ces trois comportements directement sur l'API en exécution :
+
+```
+# POST /products (non sûr, non idempotent) : 2 appels identiques donnent 2 ressources
+POST /products   -> 201  product_id=6
+POST /products   -> 201  product_id=7    (id différent => non idempotent)
+
+# GET /stocks/6 (sûr + idempotent) : 2 lectures identiques, aucun changement d'état
+GET /stocks/6    -> 200  {"product_id":6,"quantity":7}
+GET /stocks/6    -> 200  {"product_id":6,"quantity":7}
+
+# DELETE /orders/2 (non sûr mais idempotent) : le 2e appel laisse le même état
+POST /orders     -> 201  order_id=2
+DELETE /orders/2 -> 200  (commande supprimée)
+DELETE /orders/2 -> 404  (déjà absente, état inchangé => idempotent)
+```
 
 Un cas mérite une nuance. `POST /stocks` fait un `UPDATE ... SET quantity = :qty`, une affectation absolue, donc en pratique le répéter ne change rien après le premier appel. Du point de vue de la RFC, `POST` reste malgré tout classé comme non idempotent, car la sémantique de la méthode n'offre aucune garantie d'idempotence au client.
 
