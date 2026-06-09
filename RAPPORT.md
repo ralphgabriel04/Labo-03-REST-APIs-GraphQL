@@ -1,20 +1,25 @@
-# Rapport — Labo 03 : REST APIs, GraphQL
-**LOG430 – Architecture logicielle — ÉTS**
-Auteur : Ralph Christian Gabriel
+# Rapport — Laboratoire 3 : API REST et GraphQL
+
+LOG430-02 — Architecture logicielle, École de technologie supérieure (ÉTS)
+Chargé de laboratoire : Gabriel C. Ullmann
+
+Ralph Christian Gabriel
+Code permanent : GABR77340401
+Session : Été 2026
 
 ---
 
 ## Introduction
 
-Ce laboratoire transforme l'application monolithique de gestion de magasin en une **API REST/GraphQL** avec Flask, MySQL et Redis. Deux domaines coexistent : `orders` (commandes) et `stocks` (stocks). Ce rapport documente l'implémentation des activités et répond aux six questions.
+Dans ce laboratoire, on reprend l'application de gestion de magasin des labos précédents et on la fait passer d'un monolithe à une API Flask. Le code est maintenant séparé en deux domaines, les commandes (`orders`) et les stocks (`stocks`), et on ajoute par-dessus la gestion du stock des articles. MySQL conserve les données, Redis sert de cache pour les stocks, et le tout tourne dans des conteneurs Docker.
 
-L'ensemble du système est conteneurisé (Docker Compose) et validé par un test d'intégration automatisé exécuté en CI/CD.
+J'ai validé chaque activité en exécutant réellement le code plutôt qu'en me fiant à ce qui devrait marcher : le test d'intégration dans le conteneur, les appels REST et GraphQL, et le conteneur fournisseur. Les sorties reproduites ici viennent de ces exécutions.
 
 ---
 
-## Activité 1 — Diagramme ER et table `stocks`
+## Activité 1 — Diagramme ER et table stocks
 
-La table `stocks` a été créée (MySQL Workbench, puis appliquée via *Forward Engineering*). Elle est aussi déclarée dans `db-init/init.sql` pour l'initialisation automatique du conteneur :
+La table `stocks` n'existait pas au départ. Je l'ai créée dans MySQL Workbench, puis appliquée à la base avec Forward Engineering. Je l'ai aussi ajoutée à `db-init/init.sql` pour que le conteneur MySQL la recrée automatiquement à son premier démarrage :
 
 ```sql
 CREATE TABLE stocks (
@@ -24,15 +29,15 @@ CREATE TABLE stocks (
 );
 ```
 
-**Relation :** `stocks.product_id` → `products.id` (1–1). La clé étrangère garantit qu'on ne peut ajouter du stock que pour un produit existant ; `ON DELETE RESTRICT` empêche la suppression d'un produit encore référencé.
+La colonne `product_id` est à la fois la clé primaire et une clé étrangère vers `products.id`. Concrètement, on ne peut ajouter du stock que pour un produit qui existe déjà, et le `ON DELETE RESTRICT` empêche de supprimer un produit tant qu'une ligne de stock le référence.
 
-> Livrable : fichier `.mwb` joint (modèle ER complet : users, products, orders, order_items, stocks).
+Le fichier `.mwb` joint contient le modèle ER complet : users, products, orders, order_items et stocks.
 
 ---
 
 ## Activité 2 — Test du processus de stock
 
-Le test `test_stock_flow()` (`src/tests/test_store_manager.py`) implémente les 6 étapes :
+Le test `test_stock_flow()` (dans `src/tests/test_store_manager.py`) suit les six étapes demandées :
 
 | # | Action | Endpoint | Vérification |
 |---|--------|----------|--------------|
@@ -41,9 +46,9 @@ Le test `test_stock_flow()` (`src/tests/test_store_manager.py`) implémente les 
 | 3 | Vérifier le stock | `GET /stocks/:id` | `quantity == 5` |
 | 4 | Commander 2 unités | `POST /orders` | 201, `order_id > 0` |
 | 5 | Vérifier le stock | `GET /stocks/:id` | `quantity == 3` |
-| 6 | Supprimer la commande (extra) | `DELETE /orders/:id` | 200, stock remonte à `5` |
+| 6 | Supprimer la commande (étape extra) | `DELETE /orders/:id` | 200, le stock remonte à 5 |
 
-**Résultat d'exécution (dans le conteneur) :**
+En lançant `pytest` dans le conteneur, les deux tests passent :
 
 ```
 tests/test_store_manager.py::test_health PASSED       [ 50%]
@@ -51,33 +56,31 @@ tests/test_store_manager.py::test_stock_flow PASSED   [100%]
 ============================== 2 passed in 2.54s ==============================
 ```
 
-### 💡 Question 1 — Méthodes HTTP sûres / idempotentes (RFC 7231 §4.2.1–4.2.2)
+### Question 1 — Méthodes HTTP sûres et idempotentes (RFC 7231, §4.2.1 et 4.2.2)
 
-- **Sûre (safe, §4.2.1)** : la méthode ne modifie pas l'état du serveur (lecture seule).
-- **Idempotente (§4.2.2)** : exécuter la requête N fois produit le même état qu'une seule fois.
+La RFC 7231 définit deux propriétés. Une méthode est sûre (§4.2.1) si elle ne modifie pas l'état du serveur, c'est-à-dire si elle se contente de lire. Elle est idempotente (§4.2.2) si l'exécuter plusieurs fois laisse le serveur dans le même état qu'un seul appel.
 
-| Méthode | Endpoint(s) de l'activité 2 | Sûre ? | Idempotente ? |
-|---------|------------------------------|--------|---------------|
-| `GET` | `GET /stocks/:id` | ✅ Oui | ✅ Oui |
-| `POST` | `POST /products`, `POST /stocks`, `POST /orders` | ❌ Non | ❌ Non |
-| `DELETE` | `DELETE /orders/:id` | ❌ Non | ✅ Oui |
+Pour les méthodes utilisées à l'activité 2 :
 
-**Justification :**
-- `GET` est **sûre et idempotente** : elle ne fait que lire le stock.
-- `POST` n'est **ni sûre ni idempotente** : chaque appel crée une nouvelle ressource (deux `POST /orders` identiques créent deux commandes et décrémentent le stock deux fois).
-- `DELETE` est **non sûre** (elle modifie l'état) mais **idempotente** : supprimer la commande #5 une fois ou plusieurs fois aboutit au même état final (la commande n'existe plus) ; les appels suivants renvoient 404 sans changer l'état.
+| Méthode | Endpoints (activité 2) | Sûre | Idempotente |
+|---------|------------------------|------|-------------|
+| GET | `GET /stocks/:id` | Oui | Oui |
+| POST | `POST /products`, `POST /stocks`, `POST /orders` | Non | Non |
+| DELETE | `DELETE /orders/:id` | Non | Oui |
 
-> Cas particulier de `POST /stocks` : l'implémentation fait un `UPDATE ... SET quantity = :qty` (affectation absolue), donc en pratique elle est idempotente. Mais **selon la sémantique RFC de `POST`**, la méthode reste classée non idempotente (le serveur n'en garantit pas l'idempotence).
+Le `GET` se contente de lire le stock : il est donc sûr et idempotent. Le `POST` n'est ni l'un ni l'autre, parce que chaque appel crée une ressource : deux `POST /orders` identiques produisent deux commandes distinctes et décrémentent le stock deux fois. Le `DELETE` modifie l'état, donc il n'est pas sûr, mais il reste idempotent : supprimer la commande #5 une fois ou dix fois mène au même résultat final (la commande n'existe plus), les appels suivants renvoyant simplement un 404.
+
+Un cas mérite une nuance. `POST /stocks` fait un `UPDATE ... SET quantity = :qty`, une affectation absolue, donc en pratique le répéter ne change rien après le premier appel. Du point de vue de la RFC, `POST` reste malgré tout classé comme non idempotent, car la sémantique de la méthode n'offre aucune garantie d'idempotence au client.
 
 ---
 
-## Activité 3 — Rapport de stock avec JOIN SQLAlchemy
+## Activité 3 — Rapport de stock avec une jointure SQLAlchemy
 
-`get_stock_for_all_products()` (`src/stocks/queries/read_stock.py`) joint `Stock` et `Product` pour ajouter `name`, `sku`, `price`.
+La méthode `get_stock_for_all_products()` (`src/stocks/queries/read_stock.py`) ne renvoyait au départ que le `product_id` et la quantité. J'y ai ajouté `name`, `sku` et `price` en joignant `Stock` à `Product`.
 
-### 💡 Question 2 — Utilisation de `join`
+### Question 2 — Utilisation de la méthode join
 
-J'utilise la forme **« Joins to a Target with an ON Clause »** de SQLAlchemy : `query.join(cible, condition_ON)`. La cible est `Product`, et la condition `ON` est `Stock.product_id == Product.id` :
+Il n'y a pas de `relationship` ORM déclarée entre `Stock` et `Product`, donc je ne pouvais pas utiliser la forme « Simple Relationship Join » où l'on écrit juste `join(Product)`. J'ai donc pris la forme « Joins to a Target with an ON Clause », qui prend la cible et la condition de jointure en arguments : `join(Product, Stock.product_id == Product.id)`.
 
 ```python
 def get_stock_for_all_products():
@@ -101,14 +104,14 @@ def get_stock_for_all_products():
     return stock_data
 ```
 
-Comme il n'existe pas de relation ORM (`relationship`) déclarée entre `Stock` et `Product`, on ne peut pas utiliser la forme *Simple Relationship Join* (`join(Product)` implicite). On **précise donc explicitement la clause ON** via le second argument. SQLAlchemy génère :
+SQLAlchemy traduit cet appel en :
 
 ```sql
 SELECT stocks.product_id, stocks.quantity, products.name, products.sku, products.price
 FROM stocks JOIN products ON stocks.product_id = products.id;
 ```
 
-**Résultat (`GET /stocks/reports/overview-stocks`) :**
+L'endpoint `GET /stocks/reports/overview-stocks` renvoie alors le détail de chaque article :
 
 ```json
 [
@@ -121,33 +124,33 @@ FROM stocks JOIN products ON stocks.product_id = products.id;
 
 ---
 
-## Activité 4 — Endpoint GraphQL
+## Activité 4 — Utilisation de l'endpoint GraphQL
 
-L'endpoint `POST /stocks/graphql-query` permet au client de demander exactement les champs voulus.
+L'endpoint `POST /stocks/graphql-query` laisse le client demander exactement les champs qu'il veut, sans qu'on ait à créer un nouvel endpoint REST par combinaison de colonnes.
 
-### 💡 Question 3 — Résultat initial
+### Question 3 — Résultat initial
 
-Avec le résolveur d'origine (`resolve_product` ne lisant que `quantity` dans Redis, et le type GraphQL n'exposant que `id`, `name`, `quantity`), la requête suggérée :
+Au départ, le résolveur `resolve_product` ne lisait que la quantité dans Redis, et le type GraphQL `Product` n'exposait que `id`, `name` et `quantity`. La requête suggérée dans l'énoncé :
 
 ```graphql
 { product(id: "1") { id quantity } }
 ```
 
-retournait uniquement `id` et `quantity`. En demandant `name`, on obtenait la valeur **placeholder** `"Product 1"` (codée en dur), et les champs `sku`/`price` **n'existaient pas** dans le schéma (erreur *Cannot query field*). Les données réelles de l'article n'étaient donc pas disponibles via GraphQL.
-
-> 📸 **Capture Postman (Q3)** — requête suggérée `{ product(id: "1") { id quantity } }` :
+renvoyait donc bien `id` et `quantity`. Par contre, en demandant `name`, on récupérait la valeur codée en dur `"Product 1"`, et `sku` ou `price` n'existaient même pas dans le schéma (erreur « Cannot query field »). Les vraies informations de l'article n'étaient pas accessibles par GraphQL.
 
 ![Capture Postman Q3](captures/postman_q3.png)
+
+*Figure 1 — Réponse de `POST /stocks/graphql-query` dans Postman pour la requête `{ product(id: "1") { id quantity } }`.*
 
 ---
 
 ## Activité 5 — Enrichissement de l'endpoint GraphQL
 
-Trois changements : (a) ajout de `sku`/`price` au type GraphQL `Product`, (b) lecture de `name`/`sku`/`price` dans `resolve_product`, (c) écriture de ces champs dans Redis via `update_stock_redis` et `set_stock_for_product`.
+J'ai fait trois changements : ajouter `sku` et `price` au type GraphQL `Product`, lire `name`, `sku` et `price` depuis Redis dans `resolve_product`, et surtout écrire ces champs dans Redis au moment où le stock change.
 
-### 💡 Question 4 — Lignes modifiées dans `update_stock_redis`
+### Question 4 — Lignes modifiées dans update_stock_redis
 
-J'ai ouvert une session SQLAlchemy pour récupérer l'article et **construire un `mapping`** contenant `name`, `sku`, `price` en plus de `quantity`, puis je l'écris dans Redis via `hset(..., mapping=...)` :
+Avant, la fonction se contentait d'écrire la quantité : `pipeline.hset(f"stock:{product_id}", "quantity", new_quantity)`. J'ouvre maintenant une session SQLAlchemy pour aller chercher l'article, je construis un `mapping` qui contient aussi `name`, `sku` et `price`, et j'écris le tout d'un coup :
 
 ```python
 # Ajout d'information sur l'article (name, sku, price) dans Redis
@@ -161,24 +164,17 @@ if product:
 pipeline.hset(f"stock:{product_id}", mapping=mapping)
 ```
 
-Lignes clés ajoutées par rapport à l'original (qui ne faisait que `pipeline.hset(f"stock:{product_id}", "quantity", new_quantity)`) :
-1. `import` de `Product` (modèle) en tête de fichier ;
-2. ouverture d'une `session = get_sqlalchemy_session()` (fermée dans un `finally`) ;
-3. requête `session.query(Product).filter(Product.id == product_id).first()` ;
-4. construction du `mapping` `{quantity, name, sku, price}` ;
-5. `pipeline.hset(..., mapping=mapping)` au lieu d'un champ unique.
+Par rapport à la version d'origine, j'ai ajouté l'import du modèle `Product` en haut du fichier, l'ouverture d'une session (fermée dans un `finally`), la requête `session.query(Product).filter(Product.id == product_id).first()`, la construction du `mapping` à quatre champs, et le passage à `hset(..., mapping=mapping)` au lieu d'un champ unique. La même logique a été reportée dans `set_stock_for_product`, qui est le chemin emprunté par `POST /stocks`.
 
-La même logique d'enrichissement a été ajoutée à `set_stock_for_product` (chemin emprunté par `POST /stocks`).
+### Question 5 — Résultat après les améliorations
 
-### 💡 Question 5 — Résultat après améliorations
-
-Requête :
+La requête enrichie :
 
 ```graphql
 { product(id: "1") { id name sku price quantity } }
 ```
 
-Réponse réelle de `POST /stocks/graphql-query` :
+renvoie maintenant tous les champs depuis Redis :
 
 ```json
 {
@@ -195,23 +191,23 @@ Réponse réelle de `POST /stocks/graphql-query` :
 }
 ```
 
-Le client peut désormais interroger `name`, `sku`, `price` et `quantity` via GraphQL, en choisissant exactement les champs dont il a besoin.
-
-> 📸 **Capture Postman (Q5)** — requête enrichie `{ product(id: "1") { id name sku price quantity } }` :
+Le client choisit lui-même les colonnes (`name`, `sku`, `price`, `quantity`) sans qu'on ait eu à toucher à la signature de l'endpoint.
 
 ![Capture Postman Q5](captures/postman_q5.png)
 
+*Figure 2 — Réponse de `POST /stocks/graphql-query` dans Postman pour la requête enrichie `{ product(id: "1") { id name sku price quantity } }`.*
+
 ---
 
-## Activité 6 — Communication inter-conteneurs
+## Activité 6 — Communication entre conteneurs
 
-Le script fournisseur `scripts/supplier_app.py` interroge l'endpoint GraphQL depuis un conteneur séparé. Son `TEST_PAYLOAD` a été étendu pour inclure `sku` et `price` :
+Le script `scripts/supplier_app.py` joue le rôle d'une application fournisseur qui interroge l'endpoint GraphQL depuis un conteneur séparé. J'ai étendu son `TEST_PAYLOAD` pour qu'il demande aussi `sku` et `price` :
 
 ```python
 TEST_PAYLOAD = "{\"query\":\"{\\n  product(id: \\\"1\\\") {\\n    id\\n    name\\n    sku\\n    price\\n    quantity\\n  }\\n}\\n\",\"variables\":{}}"
 ```
 
-**Execution du conteneur fournisseur** (`docker compose -f scripts/docker-compose.yml up --build`). Le conteneur, sur le reseau `labo03-network`, joint l API par son **nom de service** `store_manager` :
+En lançant `docker compose -f scripts/docker-compose.yml up --build`, le conteneur fournisseur rejoint le réseau `labo03-network` et atteint l'API par son nom de service `store_manager` :
 
 ```
 INFO - Calling http://store_manager:5000/stocks/graphql-query (attempt 1/3)
@@ -219,11 +215,11 @@ INFO - Response: 200 - OK
 INFO - Response body: {"data":{"product":{"id":1,"name":"Laptop ABC","price":1999.99,"quantity":1000,"sku":"LP12567"}},"errors":null}
 ```
 
-Le client fournisseur recoit bien `name`, `sku` et `price`. `ENDPOINT_URL` a ete rendu configurable (defaut `localhost`, surcharge vers `http://store_manager:5000/...` dans `scripts/docker-compose.yml`) afin que le conteneur joigne l API via le DNS du reseau Docker.
+Le fournisseur reçoit bien `name`, `sku` et `price`. Pour que ça marche depuis un conteneur, j'ai rendu `ENDPOINT_URL` configurable : il vaut `localhost` par défaut (utile quand on exécute le script sur l'hôte), et il est surchargé vers `http://store_manager:5000/...` dans `scripts/docker-compose.yml`, de façon à passer par le DNS du réseau Docker.
 
-### 💡 Question 6 — Mécanisme de communication
+### Question 6 — Mécanisme de communication
 
-Les deux fichiers (`docker-compose.yml` à la racine et `scripts/docker-compose.yml`) déclarent **le même réseau externe `labo03-network`** :
+Le `docker-compose.yml` de la racine et celui de `scripts/` déclarent tous les deux le même réseau externe `labo03-network` :
 
 ```yaml
 networks:
@@ -232,30 +228,24 @@ networks:
     external: true
 ```
 
-**Point commun :** les deux stacks rejoignent ce **réseau bridge défini par l'utilisateur**. Sur un tel réseau, Docker fournit un **DNS interne** qui résout chaque conteneur par son **nom de service**. Le conteneur `supplier_app` peut donc joindre l'API via le hostname `store_manager` (ou `log430-a25-labo3-store_manager` selon le nom), sans connaître son IP :
+C'est leur point commun. Comme les deux stacks rejoignent ce réseau bridge défini par l'utilisateur, Docker fournit un DNS interne qui résout chaque conteneur par son nom de service. Le conteneur `supplier_app` peut donc joindre l'API avec l'adresse suivante, sans jamais connaître son IP :
 
 ```
 http://store_manager:5000/stocks/graphql-query
 ```
 
-C'est ce qui permet aux conteneurs de communiquer entre eux comme s'ils étaient sur un même réseau local, tout en restant isolés du reste du système. (Vérifié : `getent hosts mysql` depuis `store_manager` → `172.21.0.3 mysql`.)
+Les conteneurs communiquent ainsi comme s'ils partageaient un réseau local, tout en restant isolés du reste de la machine. Je l'ai vérifié depuis le conteneur `store_manager` : `getent hosts mysql` répond `172.21.0.3 mysql`.
 
 ---
 
 ## Intégration CI/CD et conteneurisation
 
-Le pipeline `.github/workflows/ci.yml` automatise les tests à chaque `push`/`pull_request` :
+Le pipeline `.github/workflows/ci.yml` rejoue les tests à chaque `push` et chaque `pull_request`. Il démarre des services MySQL 8.4.7 et Redis 7 avec leurs health-checks, installe Python 3.11 et les dépendances, génère le fichier `.env` (au passage, j'ai corrigé le bug du gabarit qui écrivait `DB_PASS` au lieu de `DB_PASSWORD`), initialise la base avec `db-init/init.sql`, puis lance `python -m pytest tests/ -v`. Le gabarit se contentait d'un `echo` à la place de la commande de test.
 
-1. **Services** : conteneurs `mysql:8.4.7` et `redis:7` avec *health-checks*.
-2. **Setup** : Python 3.11 + `pip install -r requirements.txt`.
-3. **Configuration** : génération du `.env` (correction du bug `DB_PASS` → `DB_PASSWORD`).
-4. **Initialisation BD** : `mysql ... < db-init/init.sql`.
-5. **Tests** : `python -m pytest tests/ -v` (remplace le `echo` placeholder du gabarit).
-
-Conteneurisation locale : `docker network create labo03-network` puis `docker compose up -d` démarre les 3 services (`store_manager`, `mysql`, `redis`), tous *healthy*. Le test d'intégration s'exécute via `docker compose exec store_manager python -m pytest tests/ -v`.
+En local, le même résultat s'obtient avec `docker network create labo03-network` suivi de `docker compose up -d`, ce qui démarre les trois services (`store_manager`, `mysql`, `redis`). Une fois qu'ils sont healthy, le test tourne avec `docker compose exec store_manager python -m pytest tests/ -v`.
 
 ---
 
 ## Conclusion
 
-Toutes les activités sont implémentées et **validées par exécution réelle** : test d'intégration vert (2/2), rapport de stock avec JOIN, endpoint GraphQL enrichi (name/sku/price), communication inter-conteneurs par réseau bridge nommé, et pipeline CI/CD fonctionnel. L'API illustre les principes REST (interface uniforme, sans état, client–serveur) complétés par la flexibilité de GraphQL pour la sélection des champs.
+Les six activités sont implémentées et vérifiées en exécutant réellement le code : test d'intégration au vert, rapport de stock avec jointure, endpoint GraphQL qui renvoie `name`, `sku` et `price`, communication entre conteneurs par nom de service, et pipeline CI/CD fonctionnel. L'application reste une API REST classique (interface uniforme, sans état, séparation client–serveur), à laquelle GraphQL ajoute la souplesse de laisser le client choisir les champs qu'il veut récupérer.
